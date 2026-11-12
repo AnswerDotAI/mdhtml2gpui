@@ -1,0 +1,19 @@
+[package]
+name = "mdhtml2gpui"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+description = "Render mdhtml documents as GPUI elements."
+repository = "https://github.com/AnswerDotAI/mdhtml2gpui"
+keywords = ["markdown", "gpui", "mdhtml", "ui"]
+categories = ["gui", "text-processing"]
+
+[dependencies]
+base64 = "0.23"
+gpui = { package = "gpui-pre", version = "=0.3.12", default-features = false }
+mdhtml = { package = "mdhtml-crate", version = "0.1.46", default-features = false }
+percent-encoding = "2.3"
+
+[dev-dependencies]
+gpui = { package = "gpui-pre", version = "=0.3.12", features = ["test-support"] }
+gpui_platform = { package = "gpui-pre-platform", version = "=0.3.12", features = ["font-kit", "x11", "wayland", "runtime_shaders", "test-support"] }
