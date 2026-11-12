@@ -2,17 +2,13 @@
 
 ## Prerequisites
 
-GPUI needs the platform's windowing and font libraries. On Ubuntu, CI installs:
-
-```bash
-sudo apt-get install -y libfontconfig-dev libwayland-dev libxkbcommon-x11-dev libx11-xcb-dev libvulkan1
-```
+GPUI needs the platform's windowing and font libraries. On Ubuntu, install the packages in the "Install GPUI's system libraries" step of `.github/workflows/ci.yml`.
 
 ## Testing
 
 ```bash
 cargo test
-cargo clippy --all-targets
+cargo clippy --all-targets -- -D warnings
 cargo test --test screenshots -- --ignored
 cargo run --example gallery
 cargo run --example gallery -- --dark
@@ -32,4 +28,11 @@ Formatting is manual; `rustfmt.toml` disables rustfmt, as in mdhtml.
 
 ## Release
 
-Publishing runs in GitHub Actions from `.github/workflows/ci.yml` when a `v*` tag is pushed. Release first, then bump: `ship-release` tags `v<version>`, pushes branch and tag, then bumps `Cargo.toml`.
+```bash
+cargo test
+ship-release
+```
+
+`ship-release` pushes the branch and a `v<version>` tag, then bumps the version in `Cargo.toml`. A `v*` tag starts the `publish` job in `.github/workflows/ci.yml`. After the tests pass, it publishes the crate to crates.io through trusted publishing and creates the GitHub release.
+
+Trusted publishing works only for a crate that already exists on crates.io. Publish the first release by hand with `cargo publish` and a crates.io token. Then add this repository's `ci.yml` as a trusted publisher in the crate's crates.io settings. Later tags publish without a token.

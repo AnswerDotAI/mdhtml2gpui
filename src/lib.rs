@@ -11,7 +11,6 @@ use std::rc::Rc;
 
 pub use block::{md2gpui, md2gpui_mapped, mdhtml2gpui};
 pub use image::image_source;
-pub use inline::styled_text;
 pub use source::SourceMap;
 
 /// Colours, fonts and hooks for rendering, set by the app as a GPUI global. Text colour and the body font come from the parent element.
@@ -26,9 +25,10 @@ pub struct Style {
     pub link: Hsla,
     /// A disclosure title under the pointer.
     pub hover: Hsla,
+    /// Background of highlighted text: `==x==` and `<mark>`.
+    pub mark: Hsla,
     pub mono_font: SharedString,
     pub mono_size: Pixels,
-    pub dark: bool,
     /// The disclosure marker for an open (`true`) or closed panel.
     pub chevron: fn(bool, &App) -> AnyElement,
     /// Image source for a URL that isn't a data URL, such as one that needs the app's credentials.
@@ -48,7 +48,7 @@ const MONO: &str = if cfg!(target_os = "macos") { "Menlo" } else if cfg!(target_
 impl Default for Style {
     fn default() -> Self {
         Self { code_bg: hsla(0.61, 0.2, 0.94, 1.), border: hsla(0.61, 0.13, 0.85, 1.), muted: hsla(0.61, 0.09, 0.42, 1.), link: hsla(0.6, 0.8, 0.45, 1.),
-            hover: hsla(0.6, 0.8, 0.35, 1.), mono_font: MONO.into(), mono_size: px(13.), dark: false, chevron, load: None }
+            hover: hsla(0.6, 0.8, 0.35, 1.), mark: hsla(0.14, 0.9, 0.8, 1.), mono_font: MONO.into(), mono_size: px(13.), chevron, load: None }
     }
 }
 
@@ -56,7 +56,7 @@ impl Style {
     /// The default style for a dark background.
     pub fn dark() -> Self {
         Self { code_bg: hsla(0.61, 0.15, 0.17, 1.), border: hsla(0.61, 0.1, 0.28, 1.), muted: hsla(0.61, 0.08, 0.62, 1.), link: hsla(0.6, 0.85, 0.7, 1.),
-            hover: hsla(0.6, 0.85, 0.8, 1.), dark: true, ..Self::default() }
+            hover: hsla(0.6, 0.85, 0.8, 1.), mark: hsla(0.14, 0.6, 0.3, 1.), ..Self::default() }
     }
 }
 
@@ -66,13 +66,13 @@ fn style(cx: &App) -> Style { cx.try_global::<Style>().cloned().unwrap_or_defaul
 pub fn fallbacks(doc: &Document) -> Vec<&'static str> {
     fn inlines(items: &[Inline], out: &mut Vec<&'static str>) {
         for item in items {
-            if let Some(kind) = inline::source_kind(item) { out.push(kind) }
+            if let Some((kind, _)) = inline::source(item) { out.push(kind) }
             if let Some(children) = inline::children(item) { inlines(children, out) }
         }
     }
     fn blocks(items: &[Block], out: &mut Vec<&'static str>) {
         for b in items {
-            if let Some(kind) = block::source_kind(b) { out.push(kind) }
+            if let Some((kind, _)) = block::source(b) { out.push(kind) }
             match b {
                 Block::Paragraph { children, .. } | Block::Heading { children, .. } => inlines(children, out),
                 Block::Panel(p) => { if let Some(t) = &p.title { inlines(&t.children, out) } blocks(&p.body, out) }

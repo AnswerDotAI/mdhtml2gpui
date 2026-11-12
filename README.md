@@ -1,6 +1,6 @@
 # mdhtml2gpui
 
-`mdhtml2gpui` renders [mdhtml](https://github.com/AnswerDotAI/mdhtml) documents as [GPUI](https://www.gpui.rs) elements. It walks mdhtml's semantic `Document` and maps each block and inline kind to plain GPUI elements, so it depends on GPUI and `mdhtml-crate` alone and works in any GPUI app, with or without a component library. Content GPUI can't draw shows as its source.
+`mdhtml2gpui` renders Markdown as [GPUI](https://www.gpui.rs) elements, for Rust apps built on GPUI. It parses with [mdhtml](https://github.com/AnswerDotAI/mdhtml) and draws each block and inline kind of mdhtml's `Document` with plain GPUI elements. It needs no component library. Content GPUI can't draw, such as maths, shows as its source.
 
 Add it with the GPUI version it is built against:
 
@@ -15,22 +15,36 @@ mdhtml2gpui = "0.1"
 ```rust
 use mdhtml2gpui::{Style, md2gpui};
 
-// Once, at startup. Text colour and the body font come from the parent element.
+// Once, at startup.
 cx.set_global(Style { mono_font: "JetBrains Mono".into(), ..Style::default() });
 
-// In a view's render: one id per document, which keys its panels' open state.
+// In a view's render, with one id per document.
 div().text_color(fg).child(md2gpui("note-1", "# Hello\n\nSome *text*.", cx))
 ```
 
-`md2gpui` parses Markdown with mdhtml's default options. `mdhtml2gpui` takes an already parsed `Document`, so an app can parse once and keep the document while it renders many frames.
+`md2gpui` parses Markdown with mdhtml's default options. To parse once and render the same document on many frames, parse it with `mdhtml::parse` from the `mdhtml-crate` package and pass the `Document` to `mdhtml2gpui`. Give each document its own id. The id keys the open state of the document's disclosure panels and prefixes its element ids.
 
-`Style` holds the code background, border, muted text, link and hover colours, the monospace font and size, and whether the background is dark. `Style::dark()` is a starting point for dark themes. `Style::chevron` draws the disclosure marker, a text triangle by default. `Style::load` returns the image source for URLs that aren't data URLs, for example to fetch them with the app's credentials. Without it, URLs go to GPUI's own loader and other sources are read as file paths. GPUI doesn't resolve the generic family `monospace`, so the default monospace font is Menlo on macOS, Consolas on Windows and DejaVu Sans Mono elsewhere.
+## Style
+
+Set a `Style` as a GPUI global to choose colours, fonts and image loading. Without one, the crate uses `Style::default()`, which suits a light background. Start from `Style::dark()` for a dark background. Text colour and the body font come from the parent element.
+
+- `code_bg`: background of inline code and code blocks.
+- `border`: rules, table lines and block quote bars.
+- `muted`: quotes, captions, footnotes and the source of content GPUI can't draw.
+- `link`: links, footnote references, cross-references and the border of callouts.
+- `hover`: a disclosure title under the pointer.
+- `mark`: background of highlighted text, `==marked==` and `<mark>`.
+- `mono_font` and `mono_size`: the font for code. Use a real family name, because GPUI doesn't resolve the generic family `monospace`. The default is Menlo on macOS, Consolas on Windows and DejaVu Sans Mono elsewhere.
+- `chevron`: draws the disclosure marker for an open or closed panel. The default is a text triangle.
+- `load`: returns the image source for a URL, for example to fetch it with the app's credentials.
+
+The crate decodes data URLs itself, whether or not `load` is set. It passes other URLs to `load` when it is set. Without `load`, a URL containing `://` goes to GPUI's loader and anything else is read as a file path. `image_source(url, cx)` applies these rules.
 
 ## Supported content
 
 Blocks:
 
-- headings, with assigned numbers
+- headings, with their numbers
 - paragraphs, including hard breaks
 - ordered, bullet and task lists
 - block quotes
@@ -38,40 +52,33 @@ Blocks:
 - thematic breaks
 - tables, with column alignment, header rows and captions
 - definition lists
-- panels: callouts and disclosures. A disclosure's title toggles its body, and its open state is keyed by the document id and the panel's position.
-- divs and HTML elements mdhtml parsed, drawn as their children
+- panels. Callouts have a left border in the link colour. Clicking a disclosure's title opens or closes its body. The document id and the panel's position key its open state.
+- divs, and HTML elements that mdhtml parsed, drawn as their children
 - bibliographies
 - figures, with captions
 - footnotes, collected at the end
 
-Inlines: emphasis, strong, strikethrough, highlight, code, links (clicking opens the URL), footnote references, references, spans, and HTML elements such as `kbd`, `u` and `mark`. Images, SVG included, appear between lines of text, since GPUI can't place an image inside a line. Data URLs decode in the crate.
+Inlines: emphasis, strong, strikethrough, highlight, code, links, footnote references, cross-references, spans, and HTML elements such as `kbd`, `u` and `mark`. Clicking a link opens its URL. GPUI can't place an image inside a line of text. An image, SVG included, splits its paragraph and appears between the text before it and the text after it. An image that fails to load shows its alt text in brackets.
 
-These show their source in the muted monospace style. `fallbacks(&doc)` lists the ones a document contains:
+Superscript and subscript draw as plain text, because GPUI text runs can't change their baseline or size. Table cells ignore `colspan` and `rowspan`.
 
-- maths, inline and display; drawing it needs a TeX renderer such as RaTeX, which this crate doesn't depend on
+These show their source in the muted monospace style:
+
+- maths, inline and display. Drawing it would need a TeX renderer such as RaTeX.
 - raw HTML that mdhtml keeps opaque
 - raw content for another format, such as `{=latex}`
 - scripts and template operations
 
-Superscript and subscript draw as plain text, because GPUI text runs can't change their baseline or size. Table cells ignore `colspan` and `rowspan`.
+`fallbacks(&doc)` lists, in document order, the kinds in a document that show their source. Each is one of `math`, `html`, `raw`, `script` or `operation`.
 
 ## Source mapping
 
-`block_starts(src)` gives the byte offset where each displayed top-level block starts, and `nearest(&bounds, y)` picks the block nearest a click. Together they map a click on rendered content back to its source, for example to place an editor's cursor.
+`block_starts(src)` returns the byte offset where each displayed top-level block of `src` starts. It skips link reference and attribute definitions. `nearest(&bounds, y)` returns the index of the bounds nearest to height `y`. With the rendered blocks' bounds, they map a click to the start of a block's source, for example to place an editor's cursor.
 
-`md2gpui_mapped(id, src, cx)` renders like `md2gpui` and also returns a `SourceMap`. `map.offset_at(point)` gives the source byte offset of the clicked character. It matches each rendered character of a top-level block, in order, with the source's text runs, inline code and line ends, which skips markup, link URLs and list markers. The matching runs on the first call, not on each render. A click on generated text, such as a list number, or in a footnote gives the nearest block's start.
+`md2gpui_mapped(id, src, cx)` renders like `md2gpui` and also returns a `SourceMap`. `map.offset_at(point)` returns the source byte offset of the character under `point`. It matches each rendered character of a top-level block, in order, against the source's text runs, inline code and line ends. The match skips markup, link URLs and list markers. A click on generated text such as a list number, in a footnote, or outside any text returns the start of the nearest block. `offset_at` does the matching on its first call, not during rendering.
 
+`map.segments()` returns the rendered text and `TextLayout` of each recorded segment, in drawing order. An app can register these with its own text-selection system. Footnotes and generated text, such as list numbers, aren't recorded.
 
-`map.segments()` returns each recorded text segment's rendered text and `TextLayout`, in the order they were drawn. An app can register these with its own text-selection system without this crate depending on one. Footnotes and generated text, such as list numbers, aren't recorded.
 ## Development
 
 See [DEV.md](DEV.md).
-
-## Release
-
-```bash
-cargo test
-ship-release
-```
-
-`ship-release` pushes a `v<version>` tag, which starts the release workflow in GitHub Actions, then bumps the version. The workflow publishes the crate to crates.io and creates the GitHub release. For the first release, publish manually with a token (`cargo publish`), then add this repo's `ci.yml` as a trusted publisher in the crate's crates.io settings. Later tags publish through CI without a token.

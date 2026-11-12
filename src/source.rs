@@ -5,24 +5,26 @@ use std::cell::{OnceCell, RefCell};
 use std::collections::HashMap;
 
 /// Where a rendered document's text came from in its Markdown source, for placing a cursor where the user clicked.
-pub struct SourceMap { src: String, segs: RefCell<Vec<(usize, String, TextLayout)>>, pub(crate) blocks: RefCell<Vec<Bounds<Pixels>>>, offsets: OnceCell<Vec<Vec<(usize, usize)>>> }
+pub struct SourceMap { src: String, segs: RefCell<Vec<(usize, String, TextLayout)>>, pub(crate) blocks: RefCell<Vec<Bounds<Pixels>>>, starts: OnceCell<Vec<usize>>, offsets: OnceCell<Vec<Vec<(usize, usize)>>> }
 
 impl SourceMap {
-    pub(crate) fn new(src: &str) -> Self { Self { src: src.into(), segs: RefCell::default(), blocks: RefCell::default(), offsets: OnceCell::new() } }
+    pub(crate) fn new(src: &str) -> Self { Self { src: src.into(), segs: RefCell::default(), blocks: RefCell::default(), starts: OnceCell::new(), offsets: OnceCell::new() } }
 
     pub(crate) fn record(&self, block: usize, text: String, layout: TextLayout) { self.segs.borrow_mut().push((block, text, layout)) }
 
     /// Each recorded text segment's rendered text and layout, in the order they were drawn.
     pub fn segments(&self) -> Vec<(String, TextLayout)> { self.segs.borrow().iter().map(|(_, text, layout)| (text.clone(), layout.clone())).collect() }
 
+    fn starts(&self) -> &[usize] { self.starts.get_or_init(|| block_starts(&self.src)) }
+
     /// The source byte offset under `point`: the clicked character of the text of a top-level block, or else the start of the nearest block.
     pub fn offset_at(&self, point: Point<Pixels>) -> usize {
         let segs = self.segs.borrow();
         if let Some(i) = segs.iter().position(|(_, _, layout)| layout.bounds().contains(&point)) {
-            let offsets = self.offsets.get_or_init(|| align(&self.src, &segs.iter().map(|(b, t, _)| (*b, t.as_str())).collect::<Vec<_>>()));
+            let offsets = self.offsets.get_or_init(|| align(&self.src, self.starts(), &segs.iter().map(|(b, t, _)| (*b, t.as_str())).collect::<Vec<_>>()));
             if let Some(at) = lookup(&offsets[i], segs[i].2.index_for_position(point).unwrap_or_else(|ix| ix)) { return at }
         }
-        block_starts(&self.src).get(nearest(&self.blocks.borrow(), point.y)).copied().unwrap_or(0)
+        self.starts().get(nearest(&self.blocks.borrow(), point.y)).copied().unwrap_or(0)
     }
 }
 
@@ -33,12 +35,8 @@ fn lookup(offsets: &[(usize, usize)], ix: usize) -> Option<usize> { offsets.iter
 /// segments align, in order, with its source characters: mdhtml's text runs, inline code and line ends, or all of the block when it has
 /// none, as a code block doesn't. Each rendered character takes the next equal source character within a short window. One without a
 /// match, such as an entity's result, maps to where the previous match ended.
-fn align(src: &str, segs: &[(usize, &str)]) -> Vec<Vec<(usize, usize)>> {
-    let opts = Options::default();
-    let lines: Vec<usize> = std::iter::once(0).chain(src.match_indices('\n').map(|(i, _)| i + 1)).collect();
-    let starts: Vec<usize> = mdhtml::block_spans(src, &opts).iter().filter(|s| s.depth == 0 && !matches!(s.kind, "link_ref" | "attr_def"))
-        .map(|s| lines.get(s.start).copied().unwrap_or(src.len())).collect();
-    let runs: Vec<_> = mdhtml::inlines(src, &opts).into_iter().filter(|n| matches!(n.kind, "text" | "code")).map(|n| n.range).collect();
+fn align(src: &str, starts: &[usize], segs: &[(usize, &str)]) -> Vec<Vec<(usize, usize)>> {
+    let runs: Vec<_> = mdhtml::inlines(src, &Options::default()).into_iter().filter(|n| matches!(n.kind, "text" | "code")).map(|n| n.range).collect();
     let chars = |b: usize| -> Vec<(usize, char)> {
         let block = starts[b]..starts.get(b + 1).copied().unwrap_or(src.len());
         let at = |start: usize, s: &str| s.char_indices().map(move |(i, c)| (start + i, c)).collect::<Vec<_>>();
@@ -78,7 +76,7 @@ mod tests {
         let src = "# Notes\n\nSome **bold** and a [link](https://x.y) with `code` &amp; more.\nSecond line\n\n1. first item\n2. second\n\n> quoted *text*\n\n```py\nx = 1\n```\n";
         let para = "Some bold and a link with code & more. Second line";
         let segs = [(0, "Notes"), (1, para), (2, "first item"), (2, "second"), (3, "quoted text"), (4, "x = 1")];
-        let offsets = align(src, &segs);
+        let offsets = align(src, &block_starts(src), &segs);
         let at = |seg: usize, word: &str| lookup(&offsets[seg], segs[seg].1.find(word).unwrap());
         for (seg, word, source) in [(0, "Notes", "Notes"), (1, "bold", "bold"), (1, "link", "link]"), (1, "code", "code`"), (1, "more", "more"),
             (1, "Second", "Second"), (2, "item", "item"), (3, "second", "second"), (4, "text", "text*"), (5, "x", "x = 1")] {

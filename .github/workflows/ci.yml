@@ -14,9 +14,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - run: sudo apt-get update && sudo apt-get install -y libfontconfig-dev libwayland-dev libxkbcommon-x11-dev libx11-xcb-dev libvulkan1
+      - &deps
+        name: Install GPUI's system libraries
+        run: sudo apt-get update && sudo apt-get install -y libfontconfig-dev libwayland-dev libxkbcommon-x11-dev libx11-xcb-dev libvulkan1
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo test
+      - run: cargo clippy --all-targets -- -D warnings
 
   publish:
     if: startsWith(github.ref, 'refs/tags/v')
@@ -27,7 +30,7 @@ jobs:
       id-token: write
     steps:
       - uses: actions/checkout@v7
-      - run: sudo apt-get update && sudo apt-get install -y libfontconfig-dev libwayland-dev libxkbcommon-x11-dev libx11-xcb-dev libvulkan1
+      - *deps
       - uses: dtolnay/rust-toolchain@stable
       - id: auth
         uses: rust-lang/crates-io-auth-action@v1
