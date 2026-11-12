@@ -59,6 +59,10 @@ Superscript and subscript draw as plain text, because GPUI text runs can't chang
 
 `block_starts(src)` gives the byte offset where each displayed top-level block starts, and `nearest(&bounds, y)` picks the block nearest a click. Together they map a click on rendered content back to its source, for example to place an editor's cursor.
 
+`md2gpui_mapped(id, src, cx)` renders like `md2gpui` and also returns a `SourceMap`. `map.offset_at(point)` gives the source byte offset of the clicked character. It matches each rendered character of a top-level block, in order, with the source's text runs, inline code and line ends, which skips markup, link URLs and list markers. The matching runs on the first call, not on each render. A click on generated text, such as a list number, or in a footnote gives the nearest block's start.
+
+
+`map.segments()` returns each recorded text segment's rendered text and `TextLayout`, in the order they were drawn. An app can register these with its own text-selection system without this crate depending on one. Footnotes and generated text, such as list numbers, aren't recorded.
 ## Development
 
 See [DEV.md](DEV.md).

@@ -1,6 +1,6 @@
 use gpui::{Bounds, Context, IntoElement, Modifiers, ParentElement as _, Pixels, Render, Styled as _, TestAppContext, VisualTestContext, Window, div, point, px, size};
 use mdhtml::{Options, parse};
-use mdhtml2gpui::{block_starts, fallbacks, image_source, mdhtml2gpui, nearest};
+use mdhtml2gpui::{SourceMap, block_starts, fallbacks, image_source, md2gpui_mapped, mdhtml2gpui, nearest};
 
 /// One of every node kind `md` produces with default options plus implicit figures.
 const SAMPLE: &str = r#"# Title
@@ -110,3 +110,30 @@ fn documents_render_and_keep_their_own_panel_state(cx: &mut TestAppContext) {
     cx.run_until_parked();
     assert!(cx.debug_bounds("a/panel/body").is_some() && cx.debug_bounds("b/panel/body").is_none());
 }
+
+const NOTE: &str = "Some **bold** and a [link](https://x.y) with `code`.\n\n1. first item\n2. second\n";
+
+struct Mapped(Option<std::rc::Rc<SourceMap>>);
+
+impl Render for Mapped {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let (el, map) = md2gpui_mapped("m", NOTE, cx);
+        self.0 = Some(map);
+        div().w(px(600.)).child(el)
+    }
+}
+
+/// A click on rendered text maps to that character in the source; a click on a generated list number falls back to its block's start.
+#[gpui::test]
+fn clicks_map_to_source_characters(cx: &mut TestAppContext) {
+    let window = cx.add_window(|_, _| Mapped(None));
+    let cx = &mut VisualTestContext::from_window(*window, cx);
+    cx.run_until_parked();
+    let map = window.update(cx, |v, _, _| v.0.clone().unwrap()).unwrap();
+    // The first paragraph is the first line; `m/paragraph` would also match the list items' paragraphs.
+    let at = map.offset_at(point(px(60.), px(8.)));
+    assert!(at > 0 && at < NOTE.find("\n\n").unwrap() && NOTE[at..].starts_with(|c: char| c.is_alphanumeric() || c == ' '), "{at}");
+    let list: Bounds<Pixels> = cx.debug_bounds("m/list").unwrap();
+    assert_eq!(map.offset_at(list.origin + point(px(2.), px(4.))), NOTE.find("1.").unwrap());
+}
+

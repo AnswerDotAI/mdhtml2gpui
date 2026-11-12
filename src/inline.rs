@@ -1,3 +1,4 @@
+use crate::block::At;
 use crate::{Style, image_source, style};
 use gpui::{App, Div, FontStyle, FontWeight, HighlightStyle, InteractiveText, IntoElement, ParentElement as _, SharedString, StrikethroughStyle, Styled as _,
     StyledImage as _, StyledText, UnderlineStyle, div, img, px};
@@ -109,11 +110,14 @@ pub fn styled_text(items: &[Inline], cx: &App) -> StyledText {
     styled(runs).0
 }
 
-/// A block of inline content, with clickable links and with images between its lines of text. `key` names the paragraph's elements.
-pub(crate) fn paragraph(key: &str, items: &[Inline], cx: &App) -> Div {
+/// A block of inline content, with clickable links and with images between its lines of text. `key` names the paragraph's elements, and
+/// each run of text records into `at`'s source map.
+pub(crate) fn paragraph(at: &At, key: &str, items: &[Inline], cx: &App) -> Div {
     div().flex().flex_col().gap_1().children(build(items, true, cx).into_iter().enumerate().map(|(i, seg)| match seg {
         Seg::Text(runs) => {
+            let shown = runs.text.clone();
             let (text, links) = styled(runs);
+            at.record(&shown, &text);
             if links.is_empty() { return text.into_any_element() }
             let (ranges, urls): (Vec<_>, Vec<_>) = links.into_iter().unzip();
             InteractiveText::new(SharedString::from(format!("{key}:{i}")), text).on_click(ranges, move |ix, _, cx| cx.open_url(&urls[ix])).into_any_element()

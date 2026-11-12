@@ -3,14 +3,16 @@
 mod block;
 mod image;
 mod inline;
+mod source;
 
 use gpui::{AnyElement, App, Bounds, Global, Hsla, ImageSource, IntoElement, ParentElement as _, Pixels, SharedString, div, hsla, px};
 use mdhtml::{Block, Document, Inline, Options, TableEntry};
 use std::rc::Rc;
 
-pub use block::{md2gpui, mdhtml2gpui};
+pub use block::{md2gpui, md2gpui_mapped, mdhtml2gpui};
 pub use image::image_source;
 pub use inline::styled_text;
+pub use source::SourceMap;
 
 /// Colours, fonts and hooks for rendering, set by the app as a GPUI global. Text colour and the body font come from the parent element.
 #[derive(Clone)]
