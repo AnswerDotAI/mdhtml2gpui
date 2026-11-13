@@ -1,11 +1,11 @@
 use crate::inline::paragraph;
 use crate::{SourceMap, Style, style};
-use gpui::{AnyElement, App, Div, FontWeight, InteractiveElement as _, IntoElement, ParentElement as _, RenderOnce, SharedString, StatefulInteractiveElement as _,
-    Styled as _, StyledText, Window, div, px, relative};
+use gpui::{AnyElement, App, Div, FontWeight, HighlightStyle, InteractiveElement as _, IntoElement, ParentElement as _, RenderOnce, SharedString,
+    StatefulInteractiveElement as _, Styled as _, StyledText, Window, div, px, relative};
 use gpui::prelude::FluentBuilder as _;
 use mdhtml::{Align, Block, Disclosure, Document, Options, Panel, TableEntry, TableRow};
 use std::borrow::Cow;
-use std::rc::Rc;
+use std::{ops::Range, rc::Rc};
 
 /// The kind name and source text of a block that renders as its source.
 pub(crate) fn source(b: &Block) -> Option<(&'static str, Cow<'_, str>)> {
@@ -33,9 +33,10 @@ impl At {
     }
 }
 
-fn mono(at: &At, text: &str, st: &Style) -> Div {
+/// `text` without its final newlines, in the monospace font, coloured by the ranges `colour` gives for that text.
+fn mono(at: &At, text: &str, colour: impl FnOnce(&str) -> Vec<(Range<usize>, HighlightStyle)>, st: &Style) -> Div {
     let text = text.trim_end_matches('\n');
-    let styled = StyledText::new(text.to_string());
+    let styled = StyledText::new(text.to_string()).with_highlights(colour(text));
     at.record(text, &styled);
     div().font_family(st.mono_font.clone()).text_size(st.mono_size).line_height(relative(1.3)).child(styled)
 }
@@ -61,14 +62,14 @@ fn table(at: &At, aligns: &[Align], entries: [&[TableEntry]; 3], st: &Style, cx:
     };
     let (mut i, mut rows) = (0, vec![]);
     for (part, head) in [(entries[0], true), (entries[1], false), (entries[2], false)] {
-        for entry in part { rows.push(match entry { TableEntry::Operation(op) => mono(at, &op.syntax, st).text_color(st.muted), TableEntry::Row(r) => row(r, i, head) }); i += 1 }
+        for entry in part { rows.push(match entry { TableEntry::Operation(op) => mono(at, &op.syntax, |_| vec![], st).text_color(st.muted), TableEntry::Row(r) => row(r, i, head) }); i += 1 }
     }
     div().flex().flex_col().border_t_1().border_color(st.border).children(rows)
 }
 
 fn block(at: &At, b: &Block, cx: &App) -> AnyElement {
     let st = style(cx);
-    if let Some((kind, text)) = source(b) { return at.tag(mono(at, &text, &st).text_color(st.muted), kind).into_any_element() }
+    if let Some((kind, text)) = source(b) { return at.tag(mono(at, &text, |_| vec![], &st).text_color(st.muted), kind).into_any_element() }
     let el = match b {
         Block::Heading { level, children, number, .. } => {
             let heading = div().font_weight(FontWeight::BOLD).flex().gap_2().when_some(number.as_ref(), |d, n| d.child(n.display.clone()))
@@ -76,7 +77,10 @@ fn block(at: &At, b: &Block, cx: &App) -> AnyElement {
             at.tag(match level { 1 => heading.text_2xl(), 2 => heading.text_xl(), 3 => heading.text_lg(), _ => heading }, "heading")
         }
         Block::Paragraph { children, .. } => at.tag(paragraph(at, children, cx), "paragraph"),
-        Block::CodeBlock { text, .. } => at.tag(mono(at, text, &st).p_2().rounded_md().bg(st.code_bg), "code"),
+        Block::CodeBlock { lang, text, .. } => {
+            let colour = |t: &str| st.highlight.as_ref().map_or(vec![], |h| h(lang.as_deref(), t, cx));
+            at.tag(mono(at, text, colour, &st).p_2().rounded_md().bg(st.code_bg), "code")
+        }
         Block::List { ordered, start, tight, items, .. } => at.tag(div().flex().flex_col().map(|d| if *tight { d.gap_1() } else { d.gap_2() })
             .children(items.iter().enumerate().map(|(i, item)| {
                 let marker = match item.checked {

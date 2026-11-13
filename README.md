@@ -37,6 +37,7 @@ Set a `Style` as a GPUI global to choose colours, fonts and image loading. Witho
 - `mono_font` and `mono_size`: the font for code. Use a real family name, because GPUI doesn't resolve the generic family `monospace`. The default is Menlo on macOS, Consolas on Windows and DejaVu Sans Mono elsewhere.
 - `chevron`: draws the disclosure marker for an open or closed panel. The default is a text triangle.
 - `load`: returns the image source for a URL, for example to fetch it with the app's credentials.
+- `highlight`: colours code blocks. It gets the block's language, if the fence names one, and its text without the final newline, and returns byte ranges of that text with their styles. The crate has no syntax highlighting of its own, so without `highlight` code blocks are plain.
 
 The crate decodes data URLs itself, whether or not `load` is set. It passes other URLs to `load` when it is set. Without `load`, a URL containing `://` goes to GPUI's loader and anything else is read as a file path. `image_source(url, cx)` applies these rules.
 

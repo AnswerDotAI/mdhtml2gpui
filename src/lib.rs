@@ -5,9 +5,9 @@ mod image;
 mod inline;
 mod source;
 
-use gpui::{AnyElement, App, Bounds, Global, Hsla, ImageSource, IntoElement, ParentElement as _, Pixels, SharedString, div, hsla, px};
+use gpui::{AnyElement, App, Bounds, Global, HighlightStyle, Hsla, ImageSource, IntoElement, ParentElement as _, Pixels, SharedString, div, hsla, px};
 use mdhtml::{Block, Document, Inline, Options, TableEntry};
-use std::rc::Rc;
+use std::{ops::Range, rc::Rc};
 
 pub use block::{md2gpui, md2gpui_mapped, mdhtml2gpui};
 pub use image::image_source;
@@ -33,12 +33,17 @@ pub struct Style {
     pub chevron: fn(bool, &App) -> AnyElement,
     /// Image source for a URL that isn't a data URL, such as one that needs the app's credentials.
     pub load: Option<Loader>,
+    /// Syntax colours for code blocks. Without it they're plain.
+    pub highlight: Option<Highlighter>,
 }
 
 impl Global for Style {}
 
 /// The app's image source for a URL.
 pub type Loader = Rc<dyn Fn(&str) -> ImageSource>;
+
+/// The app's syntax colours for a code block's text, given its language if the block names one: byte ranges of the text and their styles.
+pub type Highlighter = Rc<dyn Fn(Option<&str>, &str, &App) -> Vec<(Range<usize>, HighlightStyle)>>;
 
 fn chevron(open: bool, _: &App) -> AnyElement { div().child(if open { "\u{25be}" } else { "\u{25b8}" }).into_any_element() }
 
@@ -48,7 +53,7 @@ const MONO: &str = if cfg!(target_os = "macos") { "Menlo" } else if cfg!(target_
 impl Default for Style {
     fn default() -> Self {
         Self { code_bg: hsla(0.61, 0.2, 0.94, 1.), border: hsla(0.61, 0.13, 0.85, 1.), muted: hsla(0.61, 0.09, 0.42, 1.), link: hsla(0.6, 0.8, 0.45, 1.),
-            hover: hsla(0.6, 0.8, 0.35, 1.), mark: hsla(0.14, 0.9, 0.8, 1.), mono_font: MONO.into(), mono_size: px(13.), chevron, load: None }
+            hover: hsla(0.6, 0.8, 0.35, 1.), mark: hsla(0.14, 0.9, 0.8, 1.), mono_font: MONO.into(), mono_size: px(13.), chevron, load: None, highlight: None }
     }
 }
 

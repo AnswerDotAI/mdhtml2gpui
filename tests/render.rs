@@ -1,6 +1,8 @@
-use gpui::{Bounds, Context, IntoElement, Modifiers, ParentElement as _, Pixels, Render, Styled as _, TestAppContext, VisualTestContext, Window, div, point, px, size};
+use gpui::{Bounds, Context, HighlightStyle, IntoElement, Modifiers, ParentElement as _, Pixels, Render, Styled as _, TestAppContext, VisualTestContext, Window, div,
+    point, px, size};
 use mdhtml::{Options, parse};
-use mdhtml2gpui::{SourceMap, block_starts, fallbacks, image_source, md2gpui_mapped, mdhtml2gpui, nearest};
+use mdhtml2gpui::{Highlighter, SourceMap, Style, block_starts, fallbacks, image_source, md2gpui_mapped, mdhtml2gpui, nearest};
+use std::{cell::RefCell, rc::Rc};
 
 /// One of every node kind `md` produces with default options plus implicit figures.
 const SAMPLE: &str = r#"# Title
@@ -135,5 +137,22 @@ fn clicks_map_to_source_characters(cx: &mut TestAppContext) {
     assert!(at > 0 && at < NOTE.find("\n\n").unwrap() && NOTE[at..].starts_with(|c: char| c.is_alphanumeric() || c == ' '), "{at}");
     let list: Bounds<Pixels> = cx.debug_bounds("m/list").unwrap();
     assert_eq!(map.offset_at(list.origin + point(px(2.), px(4.))), NOTE.find("1.").unwrap());
+}
+
+/// A code block's text goes to the app's highlighter with the block's language and without its final newline, and its ranges colour the
+/// text. Source shown for content GPUI can't draw, such as maths and raw HTML, isn't highlighted.
+#[gpui::test]
+fn code_blocks_go_to_the_highlighter(cx: &mut TestAppContext) {
+    let seen = Rc::new(RefCell::new(vec![]));
+    let log = seen.clone();
+    let highlight: Highlighter = Rc::new(move |lang, text, _| {
+        log.borrow_mut().push((lang.map(String::from), text.to_string()));
+        vec![(0..5, HighlightStyle { color: Some(gpui::red()), ..Default::default() })]
+    });
+    cx.update(|cx| cx.set_global(Style { highlight: Some(highlight), ..Style::default() }));
+    let window = cx.add_window(|_, _| Two);
+    VisualTestContext::from_window(*window, cx).run_until_parked();
+    let seen = seen.borrow();
+    assert!(!seen.is_empty() && seen.iter().all(|s| *s == (Some("python".into()), "print(\"hi\")".into())), "{seen:?}");
 }
 
