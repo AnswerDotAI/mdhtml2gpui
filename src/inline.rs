@@ -1,7 +1,8 @@
 use crate::block::At;
-use crate::{Style, image_source, style};
+use crate::image::fitted_image;
+use crate::{Style, style};
 use gpui::{App, Div, FontStyle, FontWeight, HighlightStyle, InteractiveText, IntoElement, ParentElement as _, SharedString, StrikethroughStyle, Styled as _,
-    StyledImage as _, StyledText, UnderlineStyle, div, img, px};
+    StyledText, UnderlineStyle, div, px};
 use mdhtml::Inline;
 use std::borrow::Cow;
 use std::ops::Range;
@@ -108,6 +109,6 @@ pub(crate) fn paragraph(at: &At, items: &[Inline], cx: &App) -> Div {
             let (ranges, urls): (Vec<_>, Vec<_>) = links.into_iter().unzip();
             InteractiveText::new(SharedString::from(format!("{}:{i}", at.key())), styled).on_click(ranges, move |ix, _, cx| cx.open_url(&urls[ix])).into_any_element()
         }
-        Seg::Image { url, alt } => img(image_source(&url, cx)).max_w_full().with_fallback(move || div().child(format!("[{alt}]")).into_any_element()).into_any_element()
+        Seg::Image { url, alt } => fitted_image(&url, alt, cx).into_any_element()
     }))
 }

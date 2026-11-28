@@ -1,4 +1,4 @@
-use gpui::{Bounds, Context, HighlightStyle, IntoElement, Modifiers, ParentElement as _, Pixels, Render, Styled as _, TestAppContext, VisualTestContext, Window, div,
+use gpui::{Bounds, Context, HighlightStyle, InteractiveElement as _, IntoElement, Modifiers, ParentElement as _, Pixels, Render, Styled as _, TestAppContext, VisualTestContext, Window, div,
     point, px, size};
 use mdhtml::{Options, parse};
 use mdhtml2gpui::{Highlighter, SourceMap, Style, block_starts, fallbacks, image_source, md2gpui_mapped, mdhtml2gpui, nearest};
@@ -156,3 +156,72 @@ fn code_blocks_go_to_the_highlighter(cx: &mut TestAppContext) {
     assert!(!seen.is_empty() && seen.iter().all(|s| *s == (Some("python".into()), "print(\"hi\")".into())), "{seen:?}");
 }
 
+/// Baked table and figure captions use `AssignedNumber::display` directly without duplicating `Table Table 1:` or `Figure Figure 1:`.
+#[gpui::test]
+fn baked_captions_do_not_duplicate_prefix(cx: &mut TestAppContext) {
+    use mdhtml::resolve::{BakeOptions, RefsMode, bake_document};
+    let bake = |src: &str| {
+        let mut doc = parse(src, &Options { implicit_figures: true, ..Default::default() });
+        bake_document(&mut doc, &BakeOptions { refs: RefsMode::Lenient, ..Default::default() }).unwrap();
+        doc
+    };
+    let tbl = bake("| A |\n|:--|\n| 1 |\n: Summary {#tbl-1}\n");
+    let fig = bake("![Cap](data:image/svg+xml;utf8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%228%22%20height%3D%228%22%2F%3E){#fig-1}\n");
+
+    struct View(mdhtml::Document, mdhtml::Document);
+    impl Render for View {
+        fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            let row = |label: &'static str, text: &'static str, sel: &'static str| {
+                div().text_sm().flex().gap_1().child(label).child(text).debug_selector(move || sel.into())
+            };
+            div().w(px(600.)).flex().flex_col().items_start()
+                .child(mdhtml2gpui("tbl", &self.0, cx)).child(mdhtml2gpui("fig", &self.1, cx))
+                .child(row("Table 1:", "Summary", "ref/tbl")).child(row("Table Table 1:", "Summary", "ref/tbl-dup"))
+                .child(row("Figure 1:", "Cap", "ref/fig")).child(row("Figure Figure 1:", "Cap", "ref/fig-dup"))
+        }
+    }
+
+    let window = cx.add_window(|_, _| View(tbl, fig));
+    let cx = &mut VisualTestContext::from_window(*window, cx);
+    cx.run_until_parked();
+
+    for (sel, ok_sel, dup_sel) in [("tbl/table", "ref/tbl", "ref/tbl-dup"), ("fig/figure", "ref/fig", "ref/fig-dup")] {
+        let (cap, ok, dup) = (cx.debug_bounds(sel).unwrap().size.width, cx.debug_bounds(ok_sel).unwrap().size.width, cx.debug_bounds(dup_sel).unwrap().size.width);
+        assert!((f32::from(cap) - f32::from(ok)).abs() < 2., "{sel}: got {cap:?}, expected ~{ok:?} (dup is {dup:?})");
+        assert!(cap < dup - px(10.), "{sel}: width {cap:?} looks duplicated against {dup:?}");
+    }
+}
+
+/// Wide or tall images shrink proportionally to fit their container width without vertical letterboxing, small images stay at natural size,
+/// and broken images fall back to `[alt]`.
+#[gpui::test]
+fn images_scale_height_proportionally_without_letterboxing(cx: &mut TestAppContext) {
+    let svg = |w: u32, h: u32| format!(
+        "data:image/svg+xml;utf8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%22{w}%22%20height%3D%22{h}%22%3E%3Crect%20width%3D%22{w}%22%20height%3D%22{h}%22%20fill%3D%22%23c44%22%2F%3E%3C%2Fsvg%3E"
+    );
+    let mk = |md: String| parse(&md, &Options::default());
+    let docs = vec![
+        ("sq", mk(format!("![sq]({})\n", svg(1200, 1200)))),
+        ("wide", mk(format!("![wide]({})\n", svg(1200, 600)))),
+        ("small", mk(format!("![small]({})\n", svg(16, 16)))),
+        ("missing", mk("![missing](/nonexistent-mdhtml2gpui-test.png)\n".into())),
+    ];
+
+    struct View(Vec<(&'static str, mdhtml::Document)>);
+    impl Render for View {
+        fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            div().w(px(400.)).flex().flex_col().children(self.0.iter().map(|(id, d)| mdhtml2gpui(*id, d, cx)))
+        }
+    }
+
+    let window = cx.add_window(|_, _| View(docs));
+    let cx = &mut VisualTestContext::from_window(*window, cx);
+    for _ in 0..3 { cx.run_until_parked(); cx.refresh().unwrap(); }
+
+    for (sel, want) in [("sq/paragraph", 400.), ("wide/paragraph", 200.), ("small/paragraph", 16.)] {
+        let got = f32::from(cx.debug_bounds(sel).unwrap_or_else(|| panic!("missing {sel}")).size.height);
+        assert!((got - want).abs() < 2., "{sel}: expected ~{want}px tall, got {got}px");
+    }
+    let fb = f32::from(cx.debug_bounds("missing/paragraph").unwrap().size.height);
+    assert!(fb > 0. && fb < 50., "missing image fallback should render compact alt text, got {fb}px");
+}

@@ -45,8 +45,8 @@ fn blocks(at: &At, items: &[Block], cx: &App) -> Div {
     div().flex().flex_col().gap_2().children(items.iter().enumerate().map(|(i, b)| block(&at.child(i), b, cx)))
 }
 
-fn caption(number: Option<&str>, prefix: &str, text: Div, st: &Style) -> Div {
-    div().text_sm().text_color(st.muted).flex().gap_1().when_some(number, |d, n| d.child(format!("{prefix} {n}:"))).child(text)
+fn caption(number: Option<&str>, text: Div, st: &Style) -> Div {
+    div().text_sm().text_color(st.muted).flex().gap_1().when_some(number, |d, n| d.child(format!("{n}:"))).child(text)
 }
 
 fn table(at: &At, aligns: &[Align], entries: [&[TableEntry]; 3], st: &Style, cx: &App) -> Div {
@@ -93,7 +93,7 @@ fn block(at: &At, b: &Block, cx: &App) -> AnyElement {
         Block::Table { aligns, head, rows, foot, caption: cap, number, .. } => {
             let t = table(at, aligns, [head, rows, foot], &st, cx);
             at.tag(div().flex().flex_col().gap_1().child(t).when(!cap.is_empty(), |d| {
-                d.child(caption(number.as_ref().map(|n| n.display.as_str()), "Table", paragraph(at, cap, cx), &st))
+                d.child(caption(number.as_ref().map(|n| n.display.as_str()), paragraph(at, cap, cx), &st))
             }), "table")
         }
         Block::DefinitionList { items, .. } => at.tag(div().flex().flex_col().gap_2().children(items.iter().enumerate().map(|(i, item)| {
@@ -108,7 +108,7 @@ fn block(at: &At, b: &Block, cx: &App) -> AnyElement {
             div().flex().flex_col().gap_1().child(head).child(blocks(&at, &e.body, cx).pl_4())
         })), "bibliography"),
         Block::Figure { caption: cap, body, number, .. } => at.tag(blocks(at, body, cx).when(!cap.is_empty(), |d| {
-            d.child(caption(number.as_ref().map(|n| n.display.as_str()), "Figure", paragraph(at, cap, cx), &st))
+            d.child(caption(number.as_ref().map(|n| n.display.as_str()), paragraph(at, cap, cx), &st))
         }), "figure"),
         Block::Panel(panel) => return Details { at: at.clone(), panel: panel.clone() }.into_any_element(),
         Block::Element { children, .. } => at.tag(blocks(at, children, cx), "element"),
