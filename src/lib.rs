@@ -5,11 +5,11 @@ mod image;
 mod inline;
 mod source;
 
-use gpui::{AnyElement, App, Bounds, Global, HighlightStyle, Hsla, ImageSource, IntoElement, ParentElement as _, Pixels, SharedString, div, hsla, px};
+use gpui::{AnyElement, App, Bounds, Global, HighlightStyle, Hsla, ImageSource, IntoElement, ParentElement as _, Pixels, SharedString, Window, div, hsla, px};
 use mdhtml::{Block, Document, Inline, Options, TableEntry};
 use std::{ops::Range, rc::Rc};
 
-pub use block::{md2gpui, md2gpui_mapped, mdhtml2gpui};
+pub use block::{Anchors, md2gpui, md2gpui_mapped, mdhtml2gpui, mdhtml2gpui_anchored};
 pub use image::image_source;
 pub use source::SourceMap;
 
@@ -35,6 +35,8 @@ pub struct Style {
     pub load: Option<Loader>,
     /// Syntax colours for code blocks. Without it they're plain.
     pub highlight: Option<Highlighter>,
+    /// Click handler for links (including `#anchor` and footnote links). Without it, links open via `cx.open_url`.
+    pub on_link: Option<LinkHandler>,
 }
 
 impl Global for Style {}
@@ -45,6 +47,9 @@ pub type Loader = Rc<dyn Fn(&str) -> ImageSource>;
 /// The app's syntax colours for a code block's text, given its language if the block names one: byte ranges of the text and their styles.
 pub type Highlighter = Rc<dyn Fn(Option<&str>, &str, &App) -> Vec<(Range<usize>, HighlightStyle)>>;
 
+/// The app's click handler for a link URL.
+pub type LinkHandler = Rc<dyn Fn(&str, &mut Window, &mut App)>;
+
 fn chevron(open: bool, _: &App) -> AnyElement { div().child(if open { "\u{25be}" } else { "\u{25b8}" }).into_any_element() }
 
 /// The platform's usual monospace family. GPUI doesn't resolve the generic name `monospace`, so apps with other fonts set [`Style::mono_font`].
@@ -53,7 +58,7 @@ const MONO: &str = if cfg!(target_os = "macos") { "Menlo" } else if cfg!(target_
 impl Default for Style {
     fn default() -> Self {
         Self { code_bg: hsla(0.61, 0.2, 0.94, 1.), border: hsla(0.61, 0.13, 0.85, 1.), muted: hsla(0.61, 0.09, 0.42, 1.), link: hsla(0.6, 0.8, 0.45, 1.),
-            hover: hsla(0.6, 0.8, 0.35, 1.), mark: hsla(0.14, 0.9, 0.8, 1.), mono_font: MONO.into(), mono_size: px(13.), chevron, load: None, highlight: None }
+            hover: hsla(0.6, 0.8, 0.35, 1.), mark: hsla(0.14, 0.9, 0.8, 1.), mono_font: MONO.into(), mono_size: px(13.), chevron, load: None, highlight: None, on_link: None }
     }
 }
 
@@ -66,6 +71,10 @@ impl Style {
 }
 
 fn style(cx: &App) -> Style { cx.try_global::<Style>().cloned().unwrap_or_default() }
+
+pub(crate) fn open_link(url: &str, window: &mut Window, cx: &mut App) {
+    match style(cx).on_link { Some(f) => f(url, window, cx), None => cx.open_url(url) }
+}
 
 /// The node kinds in `doc` that render as their source because GPUI can't draw them, in document order.
 pub fn fallbacks(doc: &Document) -> Vec<&'static str> {

@@ -1,15 +1,15 @@
 use crate::block::At;
 use crate::image::fitted_image;
-use crate::{Style, style};
+use crate::{Style, open_link, style};
 use gpui::{App, Div, FontStyle, FontWeight, HighlightStyle, InteractiveText, IntoElement, ParentElement as _, SharedString, StrikethroughStyle, Styled as _,
     StyledText, UnderlineStyle, div, px};
 use mdhtml::Inline;
 use std::borrow::Cow;
 use std::ops::Range;
 
-/// Text with its style, font and link runs.
+/// Text with its style, font, link and anchor runs.
 #[derive(Default)]
-struct Runs { text: String, styles: Vec<(Range<usize>, HighlightStyle)>, fonts: Vec<(Range<usize>, SharedString)>, links: Vec<(Range<usize>, String)> }
+struct Runs { text: String, styles: Vec<(Range<usize>, HighlightStyle)>, fonts: Vec<(Range<usize>, SharedString)>, links: Vec<(Range<usize>, String)>, anchors: Vec<String> }
 
 /// A stretch of paragraph content. GPUI can't place an image inside a line, so an image splits a paragraph's text.
 enum Seg { Text(Runs), Image { url: String, alt: String } }
@@ -50,6 +50,7 @@ impl Builder<'_> {
         let st = self.st;
         let underline = Some(UnderlineStyle { thickness: px(1.), ..Default::default() });
         for item in items {
+            if let Some(id) = item.attrs().and_then(|a| a.id.as_ref()) { self.runs.anchors.push(id.clone()); }
             if let Some((_, text)) = source(item) { self.mono(&text, HighlightStyle { color: Some(st.muted), ..style }); continue }
             match item {
                 Inline::Text(s) => { self.push(s, style); }
@@ -65,7 +66,11 @@ impl Builder<'_> {
                     self.inlines(children, HighlightStyle { color: Some(st.link), underline, ..style });
                     self.runs.links.push((start..self.runs.text.len(), url.clone()));
                 }
-                Inline::FootnoteRef { label } => { self.push(&format!("[{label}]"), HighlightStyle { color: Some(st.link), ..style }); }
+                Inline::FootnoteRef { label } => {
+                    let range = self.push(&format!("[{label}]"), HighlightStyle { color: Some(st.link), ..style });
+                    self.runs.links.push((range, format!("#fn-{label}")));
+                    self.runs.anchors.push(format!("fnref-{label}"));
+                }
                 Inline::Reference { .. } => { self.push(&mdhtml::plain(std::slice::from_ref(item)), HighlightStyle { color: Some(st.link), ..style }); }
                 Inline::Image { url, alt, .. } => {
                     let runs = std::mem::take(&mut self.runs);
@@ -102,12 +107,14 @@ fn build(items: &[Inline], cx: &App) -> Vec<Seg> {
 /// text records into `at`'s source map.
 pub(crate) fn paragraph(at: &At, items: &[Inline], cx: &App) -> Div {
     div().flex().flex_col().gap_1().children(build(items, cx).into_iter().enumerate().map(|(i, seg)| match seg {
-        Seg::Text(Runs { text, styles, fonts, links }) => {
+        Seg::Text(Runs { text, styles, fonts, links, anchors }) => {
             let styled = StyledText::new(text.clone()).with_highlights(styles).with_font_family_overrides(fonts);
             at.record(&text, &styled);
+            for id in anchors { at.record_inline(id, &styled); }
             if links.is_empty() { return styled.into_any_element() }
             let (ranges, urls): (Vec<_>, Vec<_>) = links.into_iter().unzip();
-            InteractiveText::new(SharedString::from(format!("{}:{i}", at.key())), styled).on_click(ranges, move |ix, _, cx| cx.open_url(&urls[ix])).into_any_element()
+            InteractiveText::new(SharedString::from(format!("{}:{i}", at.key())), styled)
+                .on_click(ranges, move |ix, window, cx| open_link(&urls[ix], window, cx)).into_any_element()
         }
         Seg::Image { url, alt } => fitted_image(&url, alt, cx).into_any_element()
     }))

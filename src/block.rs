@@ -1,11 +1,23 @@
 use crate::inline::paragraph;
-use crate::{SourceMap, Style, style};
-use gpui::{AnyElement, App, Div, FontWeight, HighlightStyle, InteractiveElement as _, IntoElement, ParentElement as _, RenderOnce, SharedString,
-    StatefulInteractiveElement as _, Styled as _, StyledText, Window, div, px, relative};
+use crate::{SourceMap, Style, open_link, style};
+use gpui::{AnyElement, App, Bounds, Div, FontWeight, HighlightStyle, InteractiveElement as _, IntoElement, ParentElement as _, Pixels, RenderOnce,
+    SharedString, StatefulInteractiveElement as _, Styled as _, StyledText, TextLayout, Window, div, px, relative, rgba};
 use gpui::prelude::FluentBuilder as _;
 use mdhtml::{Align, Block, Disclosure, Document, Options, Panel, TableEntry, TableRow};
-use std::borrow::Cow;
-use std::{ops::Range, rc::Rc};
+use std::{borrow::Cow, cell::RefCell, collections::HashMap, ops::Range, rc::Rc};
+
+/// Anchor target bounds captured when a rendered document prepaints, keyed by block, footnote, or inline id.
+#[derive(Default)]
+pub struct Anchors { blocks: RefCell<HashMap<String, Bounds<Pixels>>>, inlines: RefCell<HashMap<String, TextLayout>> }
+
+impl Anchors {
+    /// The last prepainted bounds of anchor `id` in window coordinates, if it rendered in the current frame.
+    pub fn get(&self, id: &str) -> Option<Bounds<Pixels>> {
+        self.blocks.borrow().get(id).copied().or_else(|| self.inlines.borrow().get(id).map(TextLayout::bounds))
+    }
+
+    pub(crate) fn record_inline(&self, id: String, layout: TextLayout) { self.inlines.borrow_mut().entry(id).or_insert(layout); }
+}
 
 /// The kind name and source text of a block that renders as its source.
 pub(crate) fn source(b: &Block) -> Option<(&'static str, Cow<'_, str>)> {
@@ -16,13 +28,14 @@ pub(crate) fn source(b: &Block) -> Option<(&'static str, Cow<'_, str>)> {
 }
 
 /// Where a block renders: the document's `doc` id, which prefixes element ids and test selectors, `path`, the block's position in the document,
-/// `block`, the index of its top-level block, and the source map its text records into, if any. Footnotes have no source map.
+/// `block`, the index of its top-level block, and the source map / anchors it records into, if any. Footnotes have no source map.
 #[derive(Clone)]
-pub(crate) struct At { doc: SharedString, path: String, block: usize, map: Option<Rc<SourceMap>> }
+pub(crate) struct At { doc: SharedString, path: String, block: usize, map: Option<Rc<SourceMap>>, anchors: Option<Rc<Anchors>> }
 
 impl At {
     fn child(&self, i: usize) -> At {
-        At { doc: self.doc.clone(), path: format!("{}.{i}", self.path), block: if self.path.is_empty() { i } else { self.block }, map: self.map.clone() }
+        At { doc: self.doc.clone(), path: format!("{}.{i}", self.path), block: if self.path.is_empty() { i } else { self.block },
+            map: self.map.clone(), anchors: self.anchors.clone() }
     }
     pub(crate) fn key(&self) -> SharedString { format!("{}/{}", self.doc, self.path).into() }
     fn tag(&self, el: Div, kind: &str) -> Div { el.debug_selector(|| format!("{}/{kind}", self.doc)) }
@@ -30,6 +43,19 @@ impl At {
     /// Records `text`, laid out by `styled`, in the source map under its top-level block.
     pub(crate) fn record(&self, text: &str, styled: &StyledText) {
         if let Some(map) = &self.map { map.record(self.block, text.into(), styled.layout().clone()) }
+    }
+
+    pub(crate) fn record_inline(&self, id: String, styled: &StyledText) {
+        if let Some(anchors) = &self.anchors { anchors.record_inline(id, styled.layout().clone()) }
+    }
+
+    fn track(&self, el: Div, ids: Vec<(usize, String)>) -> Div {
+        let Some(anchors) = self.anchors.clone() else { return el };
+        if ids.is_empty() { return el }
+        el.on_children_prepainted(move |bounds, _, _| {
+            let mut map = anchors.blocks.borrow_mut();
+            for (i, id) in &ids { if let Some(&b) = bounds.get(*i) { map.insert(id.clone(), b); } }
+        })
     }
 }
 
@@ -42,7 +68,8 @@ fn mono(at: &At, text: &str, colour: impl FnOnce(&str) -> Vec<(Range<usize>, Hig
 }
 
 fn blocks(at: &At, items: &[Block], cx: &App) -> Div {
-    div().flex().flex_col().gap_2().children(items.iter().enumerate().map(|(i, b)| block(&at.child(i), b, cx)))
+    let ids: Vec<_> = items.iter().enumerate().filter_map(|(i, b)| b.attrs()?.id.clone().map(|id| (i, id))).collect();
+    at.track(div().flex().flex_col().gap_2().children(items.iter().enumerate().map(|(i, b)| block(&at.child(i), b, cx))), ids)
 }
 
 fn caption(number: Option<&str>, text: Div, st: &Style) -> Div {
@@ -98,21 +125,30 @@ fn block(at: &At, b: &Block, cx: &App) -> AnyElement {
         }
         Block::DefinitionList { items, .. } => at.tag(div().flex().flex_col().gap_2().children(items.iter().enumerate().map(|(i, item)| {
             let at = at.child(i);
-            div().flex().flex_col().gap_1()
+            let ids: Vec<_> = item.terms.iter().enumerate().filter_map(|(j, t)| t.attrs.id.clone().map(|id| (j, id))).collect();
+            at.track(div().flex().flex_col().gap_1()
                 .children(item.terms.iter().map(|t| paragraph(&at, &t.inlines, cx).font_weight(FontWeight::BOLD)))
-                .children(item.definitions.iter().enumerate().map(|(j, d)| blocks(&at.child(j), d, cx).pl_4()))
+                .children(item.definitions.iter().enumerate().map(|(j, d)| blocks(&at.child(j), d, cx).pl_4())), ids)
         })), "definitions"),
-        Block::Bibliography { entries, .. } => at.tag(div().flex().flex_col().gap_2().children(entries.iter().enumerate().map(|(i, e)| {
-            let at = at.child(i);
-            let head = div().flex().gap_2().font_weight(FontWeight::BOLD).child(paragraph(&at, &e.author, cx)).when_some(e.year.as_ref(), |d, y| d.child(format!("({y})")));
-            div().flex().flex_col().gap_1().child(head).child(blocks(&at, &e.body, cx).pl_4())
-        })), "bibliography"),
+        Block::Bibliography { entries, .. } => {
+            let ids: Vec<_> = entries.iter().enumerate().filter_map(|(i, e)| e.attrs.id.clone().map(|id| (i, id))).collect();
+            at.tag(at.track(div().flex().flex_col().gap_2().children(entries.iter().enumerate().map(|(i, e)| {
+                let at = at.child(i);
+                let head = div().flex().gap_2().font_weight(FontWeight::BOLD).child(paragraph(&at, &e.author, cx)).when_some(e.year.as_ref(), |d, y| d.child(format!("({y})")));
+                div().flex().flex_col().gap_1().child(head).child(blocks(&at, &e.body, cx).pl_4())
+            })), ids), "bibliography")
+        }
         Block::Figure { caption: cap, body, number, .. } => at.tag(blocks(at, body, cx).when(!cap.is_empty(), |d| {
             d.child(caption(number.as_ref().map(|n| n.display.as_str()), paragraph(at, cap, cx), &st))
         }), "figure"),
         Block::Panel(panel) => return Details { at: at.clone(), panel: panel.clone() }.into_any_element(),
         Block::Element { children, .. } => at.tag(blocks(at, children, cx), "element"),
-        Block::Div { children, .. } => at.tag(blocks(at, children, cx), "div"),
+        Block::Div { attrs, children } => {
+            let mut d = blocks(at, children, cx);
+            if attrs.classes.iter().any(|c| c == "prompt") { d = d.pl_3().border_l(px(3.)).border_color(rgba(0x4084f473)); }
+            else if attrs.classes.iter().any(|c| matches!(c.as_str(), "output" | "reply")) { d = d.ml_4().pl_3().border_l(px(3.)).border_color(rgba(0xe88d3a73)); }
+            at.tag(d, "div")
+        }
         Block::Math { .. } | Block::Html { .. } | Block::Raw { .. } | Block::Script { .. } | Block::Operation(_) => unreachable!("rendered by `source`"),
     };
     el.into_any_element()
@@ -131,29 +167,48 @@ impl RenderOnce for Details {
         let toggles = panel.disclosure != Disclosure::Fixed;
         let shown = !toggles || *open.read(cx);
         let title = match &panel.title {
-            Some(t) => paragraph(&at, &t.children, cx).into_any_element(),
-            None => panel.label().into_any_element()
-        };
-        let summary = div().id(SharedString::from(format!("{key}/summary"))).flex().items_center().gap_1().font_weight(FontWeight::BOLD)
+            Some(t) => paragraph(&at, &t.children, cx),
+            None => div().child(panel.label()),
+        }
+        .flex_1()
+        .min_w_0();
+        let summary = div().id(SharedString::from(format!("{key}/summary"))).flex().items_start().gap_1().min_w_0().font_weight(FontWeight::BOLD)
             .children(toggles.then(|| (st.chevron)(shown, cx))).child(title)
             .when(toggles, |s| s.cursor_pointer().hover(move |s| s.text_color(st.hover)).on_click(move |_, _, cx| open.update(cx, |o, cx| { *o = !*o; cx.notify() })))
             .debug_selector(|| format!("{}/panel/summary", at.doc));
         let body = shown.then(|| blocks(&at, &panel.body, cx).debug_selector(|| format!("{}/panel/body", at.doc)));
-        at.tag(div().flex().flex_col().gap_1().when(!panel.kind.is_empty(), |d| d.p_2().rounded_md().border_l_2().border_color(st.link))
-            .child(summary).children(body), "panel")
+        let ids: Vec<_> = panel.title.as_ref().and_then(|t| t.attrs.id.clone()).map(|id| (0, id)).into_iter().collect();
+        at.tag(at.track(div().flex().flex_col().gap_1().when(!panel.kind.is_empty(), |d| d.p_2().rounded_md().border_l_2().border_color(st.link))
+            .child(summary).children(body), ids), "panel")
     }
 }
 
 /// `doc` as GPUI elements, footnotes last. `id` names the document: it keys panel state and prefixes element ids, so give each document its own.
-pub fn mdhtml2gpui(id: impl Into<SharedString>, doc: &Document, cx: &App) -> Div { render(At { doc: id.into(), path: String::new(), block: 0, map: None }, doc, cx) }
+pub fn mdhtml2gpui(id: impl Into<SharedString>, doc: &Document, cx: &App) -> Div { render(At { doc: id.into(), path: String::new(), block: 0, map: None, anchors: None }, doc, cx) }
+
+/// Like [`mdhtml2gpui`], also returning [`Anchors`] with the last prepainted bounds of every rendered block, footnote, and inline target id.
+pub fn mdhtml2gpui_anchored(id: impl Into<SharedString>, doc: &Document, cx: &App) -> (Div, Rc<Anchors>) {
+    let anchors = Rc::new(Anchors::default());
+    let el = render(At { doc: id.into(), path: String::new(), block: 0, map: None, anchors: Some(anchors.clone()) }, doc, cx);
+    (el, anchors)
+}
 
 fn render(at: At, doc: &Document, cx: &App) -> Div {
     let st = style(cx);
     let notes = (!doc.footnotes.is_empty()).then(|| {
         let at = At { path: "fn".into(), map: None, ..at.clone() };
-        at.tag(div().flex().flex_col().gap_1().pt_2().border_t_1().border_color(st.border).text_sm().text_color(st.muted)
-            .children(doc.footnotes.iter().enumerate().map(|(i, n)| div().flex().gap_2().child(format!("[{}]", n.label)).child(blocks(&at.child(i), &n.blocks, cx)))),
-            "footnotes")
+        let ids: Vec<_> = doc.footnotes.iter().enumerate().map(|(i, n)| (i, format!("fn-{}", n.label))).collect();
+        let list = div().flex().flex_col().gap_1().pt_2().border_t_1().border_color(st.border).text_sm().text_color(st.muted)
+            .children(doc.footnotes.iter().enumerate().map(|(i, n)| {
+                let nat = at.child(i);
+                let back = format!("#fnref-{}", n.label);
+                let doc_id = at.doc.clone();
+                let ret = div().id(SharedString::from(format!("{}/back", nat.key()))).text_color(st.link).cursor_pointer().child("\u{21a9}\u{fe0e}")
+                    .on_click(move |_, window, cx| open_link(&back, window, cx))
+                    .debug_selector(move || format!("{doc_id}/footnotes/back"));
+                div().flex().gap_2().child(format!("[{}]", n.label)).child(blocks(&nat, &n.blocks, cx)).child(ret)
+            }));
+        at.tag(at.track(list, ids), "footnotes")
     });
     blocks(&at, &doc.blocks, cx).children(notes)
 }
@@ -165,7 +220,7 @@ pub fn md2gpui(id: impl Into<SharedString>, src: &str, cx: &App) -> Div { mdhtml
 pub fn md2gpui_mapped(id: impl Into<SharedString>, src: &str, cx: &App) -> (Div, Rc<SourceMap>) {
     let map = Rc::new(SourceMap::new(src));
     let seen = map.clone();
-    let el = render(At { doc: id.into(), path: String::new(), block: 0, map: Some(map.clone()) }, &mdhtml::parse(src, &Options::default()), cx)
+    let el = render(At { doc: id.into(), path: String::new(), block: 0, map: Some(map.clone()), anchors: None }, &mdhtml::parse(src, &Options::default()), cx)
         .on_children_prepainted(move |bounds, _, _| *seen.blocks.borrow_mut() = bounds);
     (el, map)
 }

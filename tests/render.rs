@@ -1,7 +1,7 @@
 use gpui::{Bounds, Context, HighlightStyle, InteractiveElement as _, IntoElement, Modifiers, ParentElement as _, Pixels, Render, Styled as _, TestAppContext, VisualTestContext, Window, div,
     point, px, size};
 use mdhtml::{Options, parse};
-use mdhtml2gpui::{Highlighter, SourceMap, Style, block_starts, fallbacks, image_source, md2gpui_mapped, mdhtml2gpui, nearest};
+use mdhtml2gpui::{Anchors, Highlighter, SourceMap, Style, block_starts, fallbacks, image_source, md2gpui_mapped, mdhtml2gpui, mdhtml2gpui_anchored, nearest};
 use std::{cell::RefCell, rc::Rc};
 
 /// One of every node kind `md` produces with default options plus implicit figures.
@@ -224,4 +224,40 @@ fn images_scale_height_proportionally_without_letterboxing(cx: &mut TestAppConte
     }
     let fb = f32::from(cx.debug_bounds("missing/paragraph").unwrap().size.height);
     assert!(fb > 0. && fb < 50., "missing image fallback should render compact alt text, got {fb}px");
+}
+
+/// Anchored rendering captures block, nested, inline, and footnote target bounds, and `Style::on_link` receives cross-ref, footnote, and backlink clicks.
+#[gpui::test]
+fn anchors_and_links_report_bounds_and_clicks(cx: &mut TestAppContext) {
+    use mdhtml::resolve::{BakeOptions, RefsMode, bake_document};
+    let clicked = Rc::new(RefCell::new(vec![]));
+    let log = clicked.clone();
+    cx.update(|cx| cx.set_global(Style { on_link: Some(Rc::new(move |u, _, _| log.borrow_mut().push(u.to_string()))), ..Style::default() }));
+    let src = "::: {#p-ref}\n[@sec-b]\n:::\n\n[^n] [tag]{#inl}\n\n::: note\n## Target {#sec-b}\n:::\n\nTerm {#term-a}\n: Def\n\n::: bibliography\nAuthor {#ref-a year=2025}\n: Book\n:::\n\n[^n]: Footnote.\n";
+    let mut doc = parse(src, &Options::default());
+    let _ = bake_document(&mut doc, &BakeOptions { refs: RefsMode::Lenient, ..Default::default() });
+    struct View(mdhtml::Document, Rc<Anchors>);
+    impl Render for View {
+        fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            let (el, anchors) = mdhtml2gpui_anchored("a", &self.0, cx);
+            self.1 = anchors;
+            div().w(px(500.)).child(el)
+        }
+    }
+    let window = cx.add_window(|_, _| View(doc, Rc::default()));
+    let cx = &mut VisualTestContext::from_window(*window, cx);
+    cx.run_until_parked();
+    let anchors = window.read_with(cx, |v, _| v.1.clone()).unwrap();
+    for id in ["p-ref", "inl", "sec-b", "term-a", "ref-a", "fn-n", "fnref-n"] {
+        assert!(anchors.get(id).is_some(), "missing anchor {id}");
+    }
+    assert!(anchors.get("sec-b").unwrap().top() < anchors.get("fn-n").unwrap().top());
+    for id in ["p-ref", "fnref-n"] {
+        let b = anchors.get(id).unwrap();
+        cx.simulate_click(b.origin + point(px(8.), b.size.height / 2.), Modifiers::default());
+    }
+    let back = cx.debug_bounds("a/footnotes/back").unwrap().center();
+    cx.simulate_click(back, Modifiers::default());
+    cx.run_until_parked();
+    assert_eq!(*clicked.borrow(), ["#sec-b", "#fn-n", "#fnref-n"]);
 }
